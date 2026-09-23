@@ -4,6 +4,50 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const MAX_BYTES = 20 * 1024 * 1024;
+const MODEL_CHAIN = ["gemini-3.8-flash", "gemini-3.5-flash-lite"];
+const RETRY_DELAYS_MS = [1500, 3500];
+const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getErrorStatus(error) {
+  const candidates = [
+    error?.status,
+    error?.code,
+    error?.response?.status,
+    error?.error?.code,
+  ];
+  for (const value of candidates) {
+    const num = Number(value);
+    if (Number.isFinite(num) && num >= 100 && num <= 599) return num;
+  }
+  const match = String(error?.message || "").match(/\b(408|429|500|502|503|504)\b/);
+  return match ? Number(match[1]) : null;
+}
+
+function isTransientError(error) {
+  return TRANSIENT_STATUS.has(getErrorStatus(error));
+}
+
+function friendlyGeminiError(error) {
+  const status = getErrorStatus(error);
+  const message = String(error?.message || "");
+  if (status === 503) {
+    return { status: 503, message: "Gemini đang quá tải tạm thời. LinguaFlow đã tự thử lại và đổi model nhưng vẫn chưa nhận được phản hồi. Hãy thử lại sau 1–2 phút." };
+  }
+  if (status === 429) {
+    return { status: 429, message: "Gemini đang giới hạn lượt gọi hoặc API key đã chạm quota. Hãy chờ một lúc rồi thử lại; nếu vẫn lặp lại, kiểm tra quota của key trong Google AI Studio." };
+  }
+  if (status && status >= 500) {
+    return { status: 502, message: "Dịch vụ Gemini đang gặp lỗi tạm thời. Hãy thử lại sau ít phút." };
+  }
+  if (/api key|permission|unauth|forbidden/i.test(message)) {
+    return { status: 401, message: "Gemini API Key không hợp lệ hoặc chưa có quyền dùng model này. Hãy kiểm tra lại key trong Cài đặt AI." };
+  }
+  return { status: 500, message: message || "Không thể tạo transcript bằng Gemini." };
+}
 
 function isAllowedMediaUrl(value) {
   try {
@@ -47,6 +91,32 @@ const responseSchema = {
   required: ["segments"],
 };
 
+async function generateWithFallback(ai, contents) {
+  let lastError = null;
+
+  for (const model of MODEL_CHAIN) {
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema,
+          },
+        });
+        return { response, modelUsed: model };
+      } catch (error) {
+        lastError = error;
+        if (!isTransientError(error) || attempt === RETRY_DELAYS_MS.length) break;
+        await sleep(RETRY_DELAYS_MS[attempt]);
+      }
+    }
+  }
+
+  throw lastError || new Error("Gemini không phản hồi.");
+}
+
 export async function POST(request) {
   let uploadedFile = null;
   let ai = null;
@@ -56,7 +126,7 @@ export async function POST(request) {
 
     if (!apiKey || typeof apiKey !== "string") return Response.json({ error: "Thiếu Gemini API Key." }, { status: 400 });
     if (!isAllowedMediaUrl(mediaUrl)) return Response.json({ error: "Media URL không hợp lệ." }, { status: 400 });
-    if (Number(sizeBytes || 0) > MAX_BYTES) return Response.json({ error: "V0.4 chỉ xử lý AI file tối đa 20 MB." }, { status: 413 });
+    if (Number(sizeBytes || 0) > MAX_BYTES) return Response.json({ error: "V0.4.1 chỉ xử lý AI file tối đa 20 MB." }, { status: 413 });
     if (!mimeType || !/^(audio|video)\//.test(mimeType)) return Response.json({ error: "Chỉ hỗ trợ audio/video." }, { status: 400 });
 
     const mediaResponse = await fetch(mediaUrl, { cache: "no-store" });
@@ -75,7 +145,7 @@ export async function POST(request) {
     for (let i = 0; i < 30; i += 1) {
       if (!currentFile?.state || currentFile.state === "ACTIVE" || currentFile.state === "SUCCEEDED") break;
       if (currentFile.state === "FAILED") throw new Error("Gemini không xử lý được file media này.");
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(2000);
       currentFile = await ai.files.get({ name: uploadedFile.name });
     }
     if (currentFile?.state === "PROCESSING") throw new Error("Gemini xử lý file quá lâu. Hãy thử file ngắn hơn.");
@@ -98,23 +168,18 @@ Rules:
 - Skip segments that contain no intelligible speech.
 - Prefer learning-useful segmentation over extremely long paragraphs.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: createUserContent([
-        createPartFromUri(currentFile.uri, currentFile.mimeType || mimeType),
-        prompt,
-      ]),
-      config: {
-        responseMimeType: "application/json",
-        responseSchema,
-      },
-    });
+    const contents = createUserContent([
+      createPartFromUri(currentFile.uri, currentFile.mimeType || mimeType),
+      prompt,
+    ]);
 
+    const { response, modelUsed } = await generateWithFallback(ai, contents);
     const parsed = JSON.parse(response.text || "{}");
     const segments = Array.isArray(parsed.segments) ? parsed.segments : [];
-    return Response.json({ segments });
+    return Response.json({ segments, modelUsed });
   } catch (error) {
-    return Response.json({ error: error?.message || "Không thể tạo transcript bằng Gemini." }, { status: 500 });
+    const friendly = friendlyGeminiError(error);
+    return Response.json({ error: friendly.message }, { status: friendly.status });
   } finally {
     if (ai && uploadedFile?.name) {
       try { await ai.files.delete({ name: uploadedFile.name }); } catch {}

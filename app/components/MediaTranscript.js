@@ -127,7 +127,7 @@ export default function MediaTranscript({ item, user, apiKey, onNeedApiKey }) {
         transcribed_at: new Date().toISOString(),
       }).eq("id", item.id).eq("user_id", user.id);
 
-      setMessage(`Đã tạo ${rows.length} đoạn transcript.`);
+      setMessage(`Đã tạo ${rows.length} đoạn transcript${result?.modelUsed ? ` bằng ${result.modelUsed}` : ""}.`);
       await loadSegments();
     } catch (err) {
       await supabase.from("media_items").update({ status: "uploaded" }).eq("id", item.id).eq("user_id", user.id);
@@ -168,7 +168,7 @@ export default function MediaTranscript({ item, user, apiKey, onNeedApiKey }) {
             <small>{item.language_code === "zh" ? "Hanzi · Pinyin · nghĩa Việt" : "English · pronunciation · nghĩa Việt"}</small>
           </div>
           <button className="primary-btn compact" onClick={generateTranscript} disabled={generating}>
-            {generating ? "AI đang xử lý..." : segments.length ? "Tạo lại transcript" : "✨ Tạo transcript AI"}
+            {generating ? "AI đang xử lý & tự thử lại nếu quá tải..." : segments.length ? "Tạo lại transcript" : "✨ Tạo transcript AI"}
           </button>
         </div>
         {message && <div className="page-success">{message}</div>}
