@@ -2,7 +2,7 @@ import "./globals.css";
 
 export const metadata = {
   title: "LinguaFlow",
-  description: "AI-powered language learning platform",
+  description: "AI language learning from real content"
 };
 
 export default function RootLayout({ children }) {

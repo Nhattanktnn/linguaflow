@@ -1,0 +1,22 @@
+LINGUAFLOW 1.0 FULL CORE — CẬP NHẬT MỘT LẦN
+
+1) SUPABASE
+- SQL Editor -> New query
+- Chạy duy nhất: supabase/setup-v1.0.sql
+
+2) GITHUB
+- Giải nén gói này.
+- Upload TOÀN BỘ nội dung bên trong vào repo linguaflow.
+- Cho phép ghi đè các file cũ.
+- Commit: LinguaFlow 1.0 full core
+
+3) VERCEL
+- Chờ deployment = Ready.
+- Không cần thêm biến môi trường mới nếu đã có:
+  NEXT_PUBLIC_SUPABASE_URL
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+
+4) TRÊN WEB
+- Cài đặt AI -> nhập Gemini key -> Kiểm tra & sử dụng.
+- Để Model = Auto — luôn theo Flash mới nhất.
+- Nếu key cũ từng bị khóa ở 3.5 Flash-Lite, bản này tự chuyển về Auto khi nâng cấp.
